@@ -109,20 +109,28 @@ class SimulatorClock(tk.Canvas):
                 a = math.radians(i * 45 - 67.5 + offset_angle)
                 self.clock_pos.append((INNER_CLOCK_R * math.cos(a), INNER_CLOCK_R * math.sin(a)))
             self.corner_map = {self.pin_labels[i]: i for i in range(8)}
-        else:
+        else: # Pentagonal & Super-Pentagonal
             clock_r, marker_r, hull_r, lobe_hull_r = 40, 48, 225, 65
             lobe_dist, self.pin_radius = 195, 15
             lobe_pos = [(lobe_dist * math.cos(math.radians(i * 72 - 90)), lobe_dist * math.sin(math.radians(i * 72 - 90))) for i in range(5)]
+            
             p_order = [0, 1, 2, 3, 4] if self.is_front else [0, 4, 3, 2, 1]
             self.pin_coords = [(115 * math.cos(math.radians(i * 72 - 90)), 115 * math.sin(math.radians(i * 72 - 90))) for i in p_order]
             self.pin_labels = ["FU", "FUR", "FDR", "FDL", "FUL"] if self.is_front else ["BU", "BUL", "BDL", "BDR", "BUR"]
+            
             self.clock_pos = []
+            # Outer ring (5 clocks)
             for i in range(5):
                 a = math.radians(i * 72 - 90); self.clock_pos.append((190 * math.cos(a), 190 * math.sin(a)))
+            # Inner ring (5 clocks)
             for i in range(5):
                 a = math.radians(i * 72 - 54); self.clock_pos.append((145 * math.cos(a), 145 * math.sin(a)))
-            if mode == "Super-Pentagonal": self.clock_pos.append((0, -45))
-            self.corner_map = {self.pin_labels[i]: i for i in range(min(5, len(self.pin_labels)))}
+            
+            # Restore your specific Super-Pentagonal center clock position
+            if mode == "Super-Pentagonal": 
+                self.clock_pos.append((0, -45)) 
+            
+            self.corner_map = {self.pin_labels[i]: i for i in range(5)}
 
         # Draw Body
         pts = []
@@ -283,53 +291,47 @@ class App(ctk.CTk):
         
         # 1. Map labels to logic indices (0-7)
         logic_map = {f"O{i+1}": i for i in range(8)}
-        
-        # 2. Mirroring: On the back, the physical layout is reversed.
-        # If O1 is Top-Right on front, its physical back-side counterpart is different.
-        mirror_pin = {0:7, 1:6, 2:5, 3:4, 4:3, 5:2, 6:1, 7:0}
-        
-        # Identify the logical index of the pin being turned
         target_pos_idx = logic_map[move_key]
         
-        # 3. Determine "Master State"
-        # We need to know if the pin we clicked is UP or DOWN from the perspective of the current face.
+        # 2. Mirror Map: Octagonal symmetry (adjust if your back-side labels differ)
+        # Usually O1 (Top Right-ish) mirrors to O8 (Top Left-ish)
+        mirror_map = {0:7, 1:6, 2:5, 3:4, 4:3, 5:2, 6:1, 7:0}
+        
+        # 3. Determine Master State
         if is_front_click:
             master_is_up = p[target_pos_idx]
         else:
-            # On the back, the physical pin at this position is mirror_pin[target_pos_idx]
-            # And its state is inverted (Front Up == Back Down)
-            master_is_up = not p[mirror_pin[target_pos_idx]]
+            master_is_up = not p[mirror_map[target_pos_idx]]
             
         for i in range(8):
-            # Determine if the pin at logical position 'i' is "Up" relative to the clicked face
-            if is_front_click:
-                current_pin_up = p[i]
-            else:
-                current_pin_up = not p[mirror_pin[i]]
+            # Check pin state relative to the clicked face
+            current_is_up = p[i] if is_front_click else not p[mirror_map[i]]
             
-            # If the pin matches the master pin's state, it moves its associated clocks
-            if current_pin_up == master_is_up:
-                # Clock targets for logical position i:
-                # Outer clock: i+1
-                # Inner clocks: i+9 and the counter-clockwise neighbor ((i-1)%8)+9
-                f_targets = {i + 1, i + 9, ((i - 1) % 8) + 9}
-                b_targets = {i + 1} # Usually, only the corresponding outer clock moves on the back
+            if current_is_up == master_is_up:
+                # Determine which physical pin index to use for the rule
+                rule_idx = i if is_front_click else mirror_map[i]
+                
+                # Define Clock targets: 
+                # Outer clocks: 1-8 | Inner clocks: 9-16
+                cluster = {rule_idx + 1, rule_idx + 9, ((rule_idx - 1) % 8) + 9}
+                corner = {rule_idx + 1}
+                
+                if current_is_up:
+                    # Pin UP: moves cluster on current face, corner on back
+                    face_targets = cluster
+                    # Mirror the index to find the correct corner clock on the back
+                    back_targets = {mirror_map[rule_idx] + 1}
+                else:
+                    # Pin DOWN: moves corner on current face, cluster on back
+                    face_targets = corner
+                    # Mirror the index to find the correct cluster on the back
+                    mirrored_rule = mirror_map[rule_idx]
+                    back_targets = {mirrored_rule + 1, mirrored_rule + 9, ((mirrored_rule - 1) % 8) + 9}
                 
                 if is_front_click:
-                    if current_pin_up:
-                        f_idx.update(f_targets)
-                        b_idx.update(b_targets)
-                    else:
-                        b_idx.update(f_targets)
-                        f_idx.update(b_targets)
+                    f_idx.update(face_targets); b_idx.update(back_targets)
                 else:
-                    # When clicking the back, the roles of f_targets and b_targets swap
-                    if current_pin_up:
-                        b_idx.update(f_targets)
-                        f_idx.update(b_targets)
-                    else:
-                        f_idx.update(f_targets)
-                        b_idx.update(b_targets)
+                    b_idx.update(face_targets); f_idx.update(back_targets)
 
         self.apply_move(f_idx, b_idx, delta, is_front_click)
 
@@ -451,17 +453,64 @@ class App(ctk.CTk):
         self.apply_move(f_idx, b_idx, delta, is_front_click)
 
     def rotate_pentagonal(self, move_key, delta, is_front_click):
-        p = self.pin_states; f_idx, b_idx = set(), set()
-        logic_map = {"FU":0, "FUR":1, "FDR":2, "FDL":3, "FUL":4, "BU":0, "BUR":1, "BDR":2, "BDL":3, "BUL":4}
-        pins = {k: (p[v] if is_front_click else not p[v]) for k, v in logic_map.items()}
-        master_state = pins[move_key]
-        back_rules = {0:{"f":{1},"b":{1,6,10,11}}, 4:{"f":{5},"b":{2,6,7}}, 3:{"f":{4},"b":{3,7,8}}, 2:{"f":{3},"b":{4,8,9}}, 1:{"f":{2},"b":{5,9,10}}}
-        front_rules = {0:{"f":{1,6,10,11},"b":{1}}, 1:{"f":{2,6,7},"b":{5}}, 2:{"f":{3,7,8},"b":{4}}, 3:{"f":{4,8,9},"b":{3}}, 4:{"f":{5,9,10},"b":{2}}}
+        p = self.pin_states
+        f_idx, b_idx = set(), set()
+        mode = self.mode_var.get()
+        
+        # Pin indices: 0:U, 1:UR, 2:DR, 3:DL, 4:UL
+        logic_map = {"FU": 0, "FUR": 1, "FDR": 2, "FDL": 3, "FUL": 4,
+                     "BU": 0, "BUL": 1, "BDL": 2, "BDR": 3, "BUR": 4}
+        target_pin_idx = logic_map[move_key]
+        
+        # Physical mapping: Front UL (4) is physically Back UR (4)
+        mirror_map = {0: 0, 1: 4, 2: 3, 3: 2, 4: 1}
+        
+        if is_front_click:
+            master_is_up = p[target_pin_idx]
+        else:
+            master_is_up = not p[mirror_map[target_pin_idx]]
+
+        # Rules define which clocks move on the CURRENT face ('cluster') 
+        # and which single clock moves on the OPPOSITE face ('corner')
+        # Pin 4 (FUL) Cluster: {5, 9, 10} | Opposite Corner: {1}
+        pin_rules = {
+            0: {"cluster": {1, 6, 10, 11}, "corner": {1}}, # Top
+            1: {"cluster": {2, 6, 7},      "corner": {2}}, # UR
+            2: {"cluster": {3, 7, 8},      "corner": {3}}, # DR
+            3: {"cluster": {4, 8, 9},      "corner": {4}}, # DL
+            4: {"cluster": {5, 9, 10},     "corner": {5}}  # UL
+        }
+
+        max_clock = 11 if mode == "Super-Pentagonal" else 10
+
         for i in range(5):
-            cur_p = p[i] if is_front_click else not p[i]
-            if cur_p == master_state:
-                rules = (front_rules if is_front_click else back_rules) if cur_p else (back_rules if is_front_click else front_rules)
-                f_idx.update(rules[i]["f"]); b_idx.update(rules[i]["b"])
+            # Check if pin matches master state relative to clicked face
+            current_is_up = p[i] if is_front_click else not p[mirror_map[i]]
+            
+            if current_is_up == master_is_up:
+                rule_idx = i if is_front_click else mirror_map[i]
+                
+                if current_is_up:
+                    # Pin UP: moves cluster on current face, corner on back
+                    face_targets = pin_rules[rule_idx]["cluster"]
+                    back_targets = pin_rules[rule_idx]["corner"]
+                else:
+                    # Pin DOWN: moves corner on current face, cluster on back
+                    # This matches your request: FUL down = F5 (corner) and B1,6,7 (back cluster)
+                    face_targets = pin_rules[rule_idx]["corner"]
+                    # To get B1, B6, B7 when FUL is down, we look at the cluster 
+                    # belonging to the mirrored pin on the back
+                    back_targets = pin_rules[mirror_map[rule_idx]]["cluster"]
+
+                # Filter for Super-Pentagonal
+                f_move = {idx for idx in face_targets if idx <= max_clock}
+                b_move = {idx for idx in back_targets if idx <= max_clock}
+
+                if is_front_click:
+                    f_idx.update(f_move); b_idx.update(b_move)
+                else:
+                    b_idx.update(f_move); f_idx.update(b_move)
+
         self.apply_move(f_idx, b_idx, delta, is_front_click)
 
     def scramble(self):
